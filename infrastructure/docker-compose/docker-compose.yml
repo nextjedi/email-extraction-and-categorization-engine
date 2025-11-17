@@ -1,0 +1,302 @@
+version: '3.8'
+
+services:
+  # ====================
+  # Infrastructure
+  # ====================
+
+  # PostgreSQL Databases
+  postgres-extraction:
+    image: postgres:16-alpine
+    container_name: imp-postgres-extraction
+    environment:
+      POSTGRES_DB: imp_extraction
+      POSTGRES_USER: imp_user
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-extraction-data:/var/lib/postgresql/data
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imp_user -d imp_extraction"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-classification:
+    image: postgres:16-alpine
+    container_name: imp-postgres-classification
+    environment:
+      POSTGRES_DB: imp_classification
+      POSTGRES_USER: imp_user
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-classification-data:/var/lib/postgresql/data
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imp_user -d imp_classification"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-processors:
+    image: postgres:16-alpine
+    container_name: imp-postgres-processors
+    environment:
+      POSTGRES_DB: imp_processors
+      POSTGRES_USER: imp_user
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-processors-data:/var/lib/postgresql/data
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imp_user -d imp_processors"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: imp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: imp-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: imp-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Kafka UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: imp-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - imp-network
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: imp-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - imp-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: imp-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - imp-network
+    depends_on:
+      - prometheus
+
+  # ====================
+  # Application Services
+  # ====================
+
+  # Gmail Service
+  gmail-service:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.gmail-service
+    container_name: imp-gmail-service
+    ports:
+      - "8090:8090"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - redis
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Extraction Service
+  extraction-service:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.extraction-service
+    container_name: imp-extraction-service
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-extraction
+      DB_PORT: 5432
+      DB_NAME: imp_extraction
+      DB_USER: imp_user
+      DB_PASSWORD: dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      GMAIL_SERVICE_URL: http://gmail-service:8090
+    depends_on:
+      - postgres-extraction
+      - redis
+      - kafka
+      - gmail-service
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Classification Service
+  classification-service:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.classification-service
+    container_name: imp-classification-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-classification
+      DB_PORT: 5432
+      DB_NAME: imp_classification
+      DB_USER: imp_user
+      DB_PASSWORD: dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - postgres-classification
+      - redis
+      - kafka
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Job Search Processor
+  job-search-processor:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.job-search-processor
+    container_name: imp-job-search-processor
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-processors
+      DB_PORT: 5432
+      DB_NAME: imp_processors
+      DB_USER: imp_user
+      DB_PASSWORD: dev_password
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - postgres-processors
+      - kafka
+      - classification-service
+    networks:
+      - imp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  imp-network:
+    driver: bridge
+
+volumes:
+  postgres-extraction-data:
+  postgres-classification-data:
+  postgres-processors-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: gmail-service
+
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000 # 1 hour
+
+server:
+  port: 8090
+
+gmail:
+  client-id: ${GMAIL_CLIENT_ID:}
+  client-secret: ${GMAIL_CLIENT_SECRET:}
+  redirect-uri: ${GMAIL_REDIRECT_URI:http://localhost:8090/oauth2/callback}
+  max-results: 100
+  cache-expiration-minutes: 60
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+logging:
+  level:
+    com.imp.gmail: DEBUG
+    root: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %logger{36} - %msg%n"

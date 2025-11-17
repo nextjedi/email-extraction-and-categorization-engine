@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: sms-service
+
+server:
+  port: 8092
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+logging:
+  level:
+    com.imp.sms: DEBUG
