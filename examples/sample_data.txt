@@ -1,0 +1,46 @@
+Email Extraction Sample Data
+=============================
+
+Customer Service Contacts:
+- General support: support@company.com
+- Technical assistance: tech.support@company.com
+- Billing inquiries: billing@company.com
+
+Sales Team:
+- Sales department: sales@company.com
+- Enterprise sales: enterprise.sales@company.com
+- Regional contacts: sales.eu@company.com, sales.us@company.com
+
+Free Email Accounts:
+- Personal contact: john.doe@gmail.com
+- Alternative email: jane.smith@yahoo.com
+- Backup account: user123@hotmail.com
+
+Educational Institutions:
+- University contact: admissions@university.edu
+- Research department: research@institution.edu
+- Student services: students@college.edu.au
+
+Government Agencies:
+- Public inquiries: info@agency.gov
+- Contact UK office: contact@department.gov.uk
+
+Business Contacts:
+- Partner companies: partner@business.com, info@enterprise.org
+- Vendor contact: vendor@supplier.net
+- Contract negotiations: contracts@firm.com
+
+Social Media & Tech:
+- Developer relations: developers@github.com
+- API support: api-support@service.io
+- Community manager: community@platform.dev
+
+Miscellaneous:
+- Newsletter subscription: newsletter@media.com
+- Event registration: events@conference.org
+- Feedback form: feedback+survey@startup.io
+- No-reply addresses: noreply@automated.com, donotreply@system.net
+
+Invalid or Incomplete:
+This text contains some emails like test@example but not complete ones.
+Also formats like @domain.com or user@ should not be extracted.

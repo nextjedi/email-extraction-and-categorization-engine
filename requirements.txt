@@ -1,0 +1,8 @@
+# Email Extraction and Categorization Engine
+# Python dependencies
+
+# Core dependencies (none required - uses only standard library)
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
