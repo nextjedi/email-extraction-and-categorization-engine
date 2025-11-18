@@ -6,8 +6,11 @@ import com.imp.extraction.repository.ExtractedMessageRepository;
 import com.imp.shared.constant.SourceType;
 import com.imp.shared.dto.*;
 import com.imp.shared.event.MessageExtractedEvent;
+import com.imp.shared.security.AuditLogger;
+import com.imp.shared.security.SecurityContext;
 import com.imp.shared.strategy.ExtractionStrategy;
 import com.imp.shared.util.MessageIdGenerator;
+import com.imp.shared.util.RedisKeyBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -22,6 +25,7 @@ import java.util.stream.Collectors;
 
 /**
  * Main extraction service that orchestrates message extraction
+ * Enhanced with multi-tenant security and data privacy
  */
 @Slf4j
 @Service
@@ -32,14 +36,28 @@ public class ExtractionService {
     private final ExtractedMessageRepository repository;
     private final MessageExtractedProducer kafkaProducer;
     private final RedisTemplate<String, String> redisTemplate;
+    private final AuditLogger auditLogger;
 
-    private static final String DEDUP_KEY_PREFIX = "dedup:message:";
     private static final long DEDUP_TTL_DAYS = 30;
 
     @Transactional
     public ExtractionResult extractMessages(ExtractionRequest request) {
+        // SECURITY: Validate user can only extract their own messages
+        if (SecurityContext.isAuthenticated()) {
+            SecurityContext.validateUserAccess(request.getUserId());
+        }
+
         log.info("Starting extraction for user {} from source {}",
             request.getUserId(), request.getSourceType());
+
+        // Audit log the extraction request
+        auditLogger.logSecurityEvent(AuditLogger.AuditEvent.builder()
+            .timestamp(LocalDateTime.now())
+            .userId(request.getUserId())
+            .action("MESSAGE_EXTRACTION_STARTED")
+            .metadata("source: " + request.getSourceType())
+            .result("IN_PROGRESS")
+            .build());
 
         // Find appropriate strategy
         ExtractionStrategy strategy = extractionStrategies.stream()
@@ -72,19 +90,32 @@ public class ExtractionService {
     }
 
     private boolean isDuplicate(SourceMessage message) {
-        String dedupKey = DEDUP_KEY_PREFIX + message.getSourceType().getCode() + ":" + message.getSourceId();
+        // SECURITY: Use user-isolated Redis keys
+        String dedupKey = RedisKeyBuilder.buildDedupKey(
+            message.getUserId(),
+            message.getSourceType().getCode(),
+            message.getSourceId()
+        );
+
         Boolean exists = redisTemplate.hasKey(dedupKey);
         if (Boolean.TRUE.equals(exists)) {
+            log.debug("Message {} is duplicate (found in Redis cache)", message.getSourceId());
             return true;
         }
 
-        // Also check database
+        // Also check database (RLS will automatically filter by user_id)
         return repository.existsBySourceIdAndSourceType(message.getSourceId(), message.getSourceType());
     }
 
     private void markInDedup(SourceMessage message) {
-        String dedupKey = DEDUP_KEY_PREFIX + message.getSourceType().getCode() + ":" + message.getSourceId();
+        // SECURITY: Use user-isolated Redis keys
+        String dedupKey = RedisKeyBuilder.buildDedupKey(
+            message.getUserId(),
+            message.getSourceType().getCode(),
+            message.getSourceId()
+        );
         redisTemplate.opsForValue().set(dedupKey, "1", DEDUP_TTL_DAYS, TimeUnit.DAYS);
+        log.debug("Marked message {} as processed in dedup cache", message.getSourceId());
     }
 
     private ExtractedMessage saveMessage(SourceMessage sourceMessage, String correlationId) {
@@ -151,10 +182,60 @@ public class ExtractionService {
     }
 
     public List<ExtractedMessage> getMessagesByUser(String userId, SourceType sourceType) {
+        // SECURITY: Validate user can only access their own messages
+        if (SecurityContext.isAuthenticated()) {
+            SecurityContext.validateUserAccess(userId);
+        }
+
+        auditLogger.logSecurityEvent(AuditLogger.AuditEvent.builder()
+            .timestamp(LocalDateTime.now())
+            .userId(userId)
+            .action("MESSAGES_ACCESSED")
+            .metadata("source: " + sourceType)
+            .result("SUCCESS")
+            .build());
+
+        // Database RLS will automatically filter by user_id
         return repository.findByUserIdAndSourceType(userId, sourceType);
     }
 
     public long getMessageCount(String userId, SourceType sourceType) {
+        // SECURITY: Validate user can only access their own count
+        if (SecurityContext.isAuthenticated()) {
+            SecurityContext.validateUserAccess(userId);
+        }
+
+        // Database RLS will automatically filter by user_id
         return repository.countByUserIdAndSourceType(userId, sourceType);
+    }
+
+    /**
+     * GDPR: Delete all user data
+     */
+    @Transactional
+    public void deleteUserData(String userId, String reason) {
+        // SECURITY: Validate user can only delete their own data
+        if (SecurityContext.isAuthenticated()) {
+            SecurityContext.validateUserAccess(userId);
+        }
+
+        log.warn("Deleting all data for user {}: {}", userId, reason);
+
+        // Audit log before deletion
+        auditLogger.logDataDeletion(userId, reason);
+
+        // Delete from database (RLS ensures only user's data is deleted)
+        List<ExtractedMessage> messages = repository.findByUserIdAndSourceType(userId, null);
+        repository.deleteAll(messages);
+
+        // Delete from Redis cache
+        String pattern = RedisKeyBuilder.buildUserPattern(userId);
+        redisTemplate.keys(pattern).forEach(key -> {
+            if (RedisKeyBuilder.isUserKey(key, userId)) {
+                redisTemplate.delete(key);
+            }
+        });
+
+        log.info("Successfully deleted all data for user {}", userId);
     }
 }
